@@ -293,6 +293,109 @@ def draw_fitness_progression(ax, all_gens: list[str]):
     ax.grid(True, alpha=0.3)
 
 
+# ── IO Averages ─────────────────────────────────────────────────────
+
+def load_io_averages(gen_dir: str) -> dict | None:
+    """Load io_averages.json from a generation folder, or None."""
+    path = os.path.join(gen_dir, "io_averages.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def draw_io_averages(ax, all_gens: list[str], current_gen_idx: int):
+    """Draw IO average values across generations as line plots."""
+    ax.clear()
+
+    all_io = []
+    gen_nums = []
+    for gen_dir in all_gens:
+        io = load_io_averages(gen_dir)
+        if io is not None:
+            all_io.append(io)
+            gen_nums.append(io.get("generation", 0))
+
+    if not all_io:
+        ax.text(0.5, 0.5, "No IO data yet\n(io_averages.json)",
+                ha="center", va="center", fontsize=9, color="#999",
+                transform=ax.transAxes)
+        ax.set_title("IO Averages", fontsize=9)
+        return
+
+    n_inputs = len(all_io[0]["avgInputs"])
+    n_outputs = len(all_io[0]["avgOutputs"])
+
+    # Pick a subset of input labels to plot (too many lines gets unreadable)
+    # Always show: LOS, Dist, Dir X/Y/Z, and all 3 output channels
+    key_input_indices = [0, 1, 2, 3, 4]  # LOS, Dist, Dir X, Dir Y, Dir Z
+    key_input_labels = ["LOS", "Dist", "Dir X", "Dir Y", "Dir Z"]
+    input_colors = ["#2196F3", "#FF9800", "#E91E63", "#9C27B0", "#00BCD4"]
+
+    output_labels = OUTPUT_LABELS[:n_outputs]
+    output_colors = ["#4CAF50", "#8BC34A", "#CDDC39"]
+
+    # Plot key inputs
+    for k, (idx, label) in enumerate(zip(key_input_indices, key_input_labels)):
+        if idx < n_inputs:
+            vals = [io["avgInputs"][idx] for io in all_io]
+            ax.plot(gen_nums, vals, "-", color=input_colors[k % len(input_colors)],
+                    linewidth=1.2, label=f"In: {label}", alpha=0.8, markersize=2)
+
+    # Plot outputs (these are the critical ones to watch)
+    for k in range(min(n_outputs, len(output_labels))):
+        vals = [io["avgOutputs"][k] for io in all_io]
+        ax.plot(gen_nums, vals, "o-", color=output_colors[k % len(output_colors)],
+                linewidth=1.5, label=f"Out: {output_labels[k]}",
+                markersize=3, alpha=0.9)
+
+    # Highlight current gen
+    if 0 <= current_gen_idx < len(all_gens):
+        folder_name = os.path.basename(all_gens[current_gen_idx])
+        num = int(folder_name.split("_")[1])
+        ax.axvline(num, color="#2196F3", alpha=0.3, linewidth=2)
+
+    ax.set_xlabel("Generation", fontsize=7)
+    ax.set_ylabel("Avg Value", fontsize=7)
+    ax.set_title("IO Averages (key inputs + outputs)", fontsize=9)
+    ax.tick_params(labelsize=6)
+    ax.legend(fontsize=5, ncol=2, loc="upper right")
+    ax.grid(True, alpha=0.3)
+
+
+def draw_io_bar(ax, gen_dir: str):
+    """Draw a bar chart of current generation's IO averages."""
+    ax.clear()
+    io = load_io_averages(gen_dir)
+    if io is None:
+        ax.text(0.5, 0.5, "No IO data for this gen",
+                ha="center", va="center", fontsize=9, color="#999",
+                transform=ax.transAxes)
+        ax.set_title("IO Snapshot", fontsize=9)
+        return
+
+    avg_in = io["avgInputs"]
+    avg_out = io["avgOutputs"]
+    gen = io.get("generation", "?")
+
+    # Build labels
+    n_in = len(avg_in)
+    in_labels = INPUT_LABELS[:n_in] if n_in <= len(INPUT_LABELS) else [str(i) for i in range(n_in)]
+    out_labels = OUTPUT_LABELS[:len(avg_out)]
+
+    all_labels = in_labels + ["│"] + out_labels
+    all_vals = list(avg_in) + [0] + list(avg_out)
+    colors = (["#2196F3"] * n_in) + ["#fafafa"] + (["#4CAF50"] * len(avg_out))
+
+    x = np.arange(len(all_vals))
+    ax.bar(x, all_vals, color=colors, edgecolor="none", width=0.7)
+    ax.set_xticks(x)
+    ax.set_xticklabels(all_labels, fontsize=4, rotation=60, ha="right")
+    ax.axhline(0, color="#333", linewidth=0.5)
+    ax.set_title(f"IO Snapshot — Gen {gen} (blue=inputs, green=outputs)", fontsize=8)
+    ax.tick_params(axis="y", labelsize=6)
+
+
 # ── Main ─────────────────────────────────────────────────────────────
 
 def main():
@@ -331,14 +434,15 @@ def main():
     filter_mode = "all"    # "all", "pos", "neg"
     thickness_on = True
 
-    # Set up figure
-    fig = plt.figure(figsize=(14, 8), facecolor="#fafafa")
+    # Set up figure: network on top, 4 panels on bottom
+    fig = plt.figure(figsize=(16, 10), facecolor="#fafafa")
     fig.canvas.manager.set_window_title("Neuroevolution Visualizer")
 
-    # Layout: big network graph on top, histogram + fitness below
-    ax_net = fig.add_axes([0.02, 0.3, 0.96, 0.68])
-    ax_hist = fig.add_axes([0.06, 0.06, 0.38, 0.2])
-    ax_fit = fig.add_axes([0.56, 0.06, 0.38, 0.2])
+    ax_net  = fig.add_axes([0.02, 0.42, 0.96, 0.56])    # network graph
+    ax_hist = fig.add_axes([0.04, 0.05, 0.21, 0.30])     # weight distribution
+    ax_fit  = fig.add_axes([0.30, 0.05, 0.21, 0.30])     # fitness progression
+    ax_io   = fig.add_axes([0.56, 0.05, 0.21, 0.30])     # IO progression
+    ax_bar  = fig.add_axes([0.82, 0.05, 0.16, 0.30])     # IO snapshot bar
 
     def refresh():
         nets = discover_networks(all_gens[gen_idx])
@@ -352,11 +456,11 @@ def main():
         draw_network(ax_net, data, W, b, filter_mode, thickness_on)
         draw_histogram(ax_hist, W, data)
         draw_fitness_progression(ax_fit, all_gens)
+        draw_io_averages(ax_io, all_gens, gen_idx)
+        draw_io_bar(ax_bar, all_gens[gen_idx])
 
         # Highlight current gen on fitness chart
         gen_num = data.get("generation", 0)
-        for line in ax_fit.get_lines():
-            pass  # fitness chart redraws each time, no highlight needed
         ax_fit.axvline(gen_num, color="#2196F3", alpha=0.4, linewidth=2)
 
         fig.canvas.draw_idle()
