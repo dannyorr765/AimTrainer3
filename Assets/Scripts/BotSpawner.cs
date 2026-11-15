@@ -161,14 +161,16 @@ public class BotSpawner : MonoBehaviour
 
         Debug.Log($"[Gen {generation}] Best: {genBest:F2}s | Avg: {genAvg:F2}s | All-time: {bestFitnessEver:F2}s");
 
-        // Save top networks before building new population
+        // Save top networks and IO averages before building new population
         SaveTopNetworks(fitnesses, ranked);
+        SaveIOAverages();
 
         var newPop = new List<NeuralNetwork>();
 
-        // Elitism — top performers pass through unchanged
-        for (int i = 0; i < eliteCount && i < population.Count; i++)
-            newPop.Add(population[ranked[i]].Clone());
+        // Elitism — fitness-proportionate selection (no hard cutoff)
+        var eliteIndices = WeightedSampleWithoutReplacement(fitnesses, eliteCount);
+        foreach (int idx in eliteIndices)
+            newPop.Add(population[idx].Clone());
 
         // Fill the rest via tournament selection → crossover → mutation
         while (newPop.Count < botsPerGeneration)
@@ -182,6 +184,60 @@ public class BotSpawner : MonoBehaviour
 
         population = newPop;
         generation++;
+    }
+
+    /// <summary>
+    /// Selects `count` unique indices, weighted by fitness.
+    /// Higher fitness = higher chance, but nothing is guaranteed.
+    /// </summary>
+    private List<int> WeightedSampleWithoutReplacement(float[] fitnesses, int count)
+    {
+        // Shift so the worst bot still has a small positive weight
+        float minFit = fitnesses.Min();
+        float shift = (minFit < 0f) ? -minFit + 0.1f : 0.1f;
+
+        float[] weights = new float[fitnesses.Length];
+        for (int i = 0; i < fitnesses.Length; i++)
+            weights[i] = fitnesses[i] + shift;
+
+        var selected = new List<int>();
+        bool[] taken = new bool[fitnesses.Length];
+
+        for (int s = 0; s < count && s < fitnesses.Length; s++)
+        {
+            // Sum available weights
+            float totalWeight = 0f;
+            for (int i = 0; i < weights.Length; i++)
+                if (!taken[i]) totalWeight += weights[i];
+
+            // Roulette spin
+            float spin = Random.Range(0f, totalWeight);
+            float cumulative = 0f;
+            int chosen = -1;
+
+            for (int i = 0; i < weights.Length; i++)
+            {
+                if (taken[i]) continue;
+                cumulative += weights[i];
+                if (spin <= cumulative)
+                {
+                    chosen = i;
+                    break;
+                }
+            }
+
+            // Fallback (float precision edge case)
+            if (chosen == -1)
+            {
+                for (int i = weights.Length - 1; i >= 0; i--)
+                    if (!taken[i]) { chosen = i; break; }
+            }
+
+            selected.Add(chosen);
+            taken[chosen] = true;
+        }
+
+        return selected;
     }
 
     private NeuralNetwork TournamentSelect(float[] fitnesses)
@@ -334,6 +390,59 @@ public class BotSpawner : MonoBehaviour
         return true;
     }
 
+    // --- IO Averages ---
+
+    private void SaveIOAverages()
+    {
+        if (activeBots.Count == 0) return;
+
+        int inputSize = activeBots[0].InputSize;
+        int outputSize = activeBots[0].OutputSize;
+
+        // Average each bot's IO averages across the whole generation
+        float[] avgInputs = new float[inputSize];
+        float[] avgOutputs = new float[outputSize];
+        int botCount = 0;
+
+        foreach (var bot in activeBots)
+        {
+            if (bot == null) continue;
+            float[] botInputs = bot.GetAverageInputs();
+            float[] botOutputs = bot.GetAverageOutputs();
+            for (int i = 0; i < inputSize; i++)
+                avgInputs[i] += botInputs[i];
+            for (int i = 0; i < outputSize; i++)
+                avgOutputs[i] += botOutputs[i];
+            botCount++;
+        }
+
+        if (botCount == 0) return;
+
+        for (int i = 0; i < inputSize; i++)
+            avgInputs[i] /= botCount;
+        for (int i = 0; i < outputSize; i++)
+            avgOutputs[i] /= botCount;
+
+        var ioData = new IOAverageData
+        {
+            generation = generation,
+            avgInputs = avgInputs,
+            avgOutputs = avgOutputs,
+            botCount = botCount
+        };
+
+        string genDir = Path.Combine(savePath, $"Gen_{generation:D4}");
+        Directory.CreateDirectory(genDir);
+        string json = JsonUtility.ToJson(ioData, true);
+        File.WriteAllText(Path.Combine(genDir, "io_averages.json"), json);
+
+        // Log a compact summary
+        string inputStr = string.Join(", ", avgInputs.Select(v => v.ToString("F3")));
+        string outputStr = string.Join(", ", avgOutputs.Select(v => v.ToString("F3")));
+        Debug.Log($"[Gen {generation}] IO Averages — Inputs: [{inputStr}]");
+        Debug.Log($"[Gen {generation}] IO Averages — Outputs: [{outputStr}]");
+    }
+
     [System.Serializable]
     private class SaveData
     {
@@ -342,5 +451,14 @@ public class BotSpawner : MonoBehaviour
         public int generation;
         public float fitness;
         public int rank;
+    }
+
+    [System.Serializable]
+    private class IOAverageData
+    {
+        public int generation;
+        public float[] avgInputs;
+        public float[] avgOutputs;
+        public int botCount;
     }
 }

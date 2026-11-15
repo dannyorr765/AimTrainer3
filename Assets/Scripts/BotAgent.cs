@@ -37,12 +37,35 @@ public class BotAgent : MonoBehaviour
     private Vector3 positionEMA;
     private float stationaryTime;
 
+    // IO tracking: running sums + tick count for per-bot averages
+    private double[] inputSums;
+    private double[] outputSums;
+    private int tickCount;
+
     // 1 (LOS) + 1 (distance) + 3 (direction XYZ) + raycasts + memory*3
     public int InputSize => 5 + numRaycasts + moveMemorySize * 3;
     public int OutputSize => 3;  // move X, Y, Z
     public float SurvivalTime { get; private set; }
     public float Fitness { get; private set; }
     public float StationaryTime => stationaryTime;
+
+    public float[] GetAverageInputs()
+    {
+        if (tickCount == 0) return new float[InputSize];
+        float[] avg = new float[inputSums.Length];
+        for (int i = 0; i < avg.Length; i++)
+            avg[i] = (float)(inputSums[i] / tickCount);
+        return avg;
+    }
+
+    public float[] GetAverageOutputs()
+    {
+        if (tickCount == 0) return new float[OutputSize];
+        float[] avg = new float[outputSums.Length];
+        for (int i = 0; i < avg.Length; i++)
+            avg[i] = (float)(outputSums[i] / tickCount);
+        return avg;
+    }
 
     public void SetFitness(float fitness)
     {
@@ -65,6 +88,11 @@ public class BotAgent : MonoBehaviour
         stationaryTime = 0f;
         positionEMA = transform.position;
         ResetMoveHistory();
+
+        // IO tracking
+        inputSums = new double[InputSize];
+        outputSums = new double[OutputSize];
+        tickCount = 0;
     }
 
     void FixedUpdate()
@@ -79,6 +107,13 @@ public class BotAgent : MonoBehaviour
 
         float[] observations = GatherObservations();
         float[] actions = network.Forward(observations);
+
+        // Accumulate IO for average tracking
+        for (int i = 0; i < observations.Length; i++)
+            inputSums[i] += observations[i];
+        for (int i = 0; i < actions.Length; i++)
+            outputSums[i] += actions[i];
+        tickCount++;
 
         ApplyMovement(actions);
         RecordMove(actions);
