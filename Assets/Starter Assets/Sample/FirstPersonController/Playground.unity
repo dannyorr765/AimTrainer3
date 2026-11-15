@@ -1177,13 +1177,19 @@ MonoBehaviour:
   botPrefab: {fileID: 1093463952814168274, guid: c8851103846085a4d976db4b937994d1, type: 3}
   player: {fileID: 5393215579111688477}
   botsPerGeneration: 30
-  spawnRadius: 1
-  respawnDelay: 2
-  hiddenLayers: 2000000018000000i
+  spawnRadius: 4
+  respawnDelay: 0
   eliteCount: 5
   mutationRate: 0.15
   mutationMagnitude: 0.3
-  campingPenaltyRate: 0.5
+  survivalWeight: 0.3
+  engagementWeight: 1
+  campingPenaltyRate: 1
+  addNodeRate: 0.07
+  addConnectionRate: 0.05
+  weightResetRate: 0.1
+  pruneRate: 0.15
+  pruneThreshold: 0.05
   saveTopN: 5
   saveFolder: SavedNetworks
   generation: 1
@@ -1198,7 +1204,7 @@ Transform:
   m_GameObject: {fileID: 1434943295}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 5.22, y: 7.55, z: 12.46}
+  m_LocalPosition: {x: 3.71, y: 5.5, z: 23.2}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
