@@ -4,6 +4,10 @@ using System.Collections.Generic;
 /// <summary>
 /// Goes on the bot prefab. Handles sensing, network evaluation,
 /// movement, and death. Initialized at runtime by BotSpawner.
+///
+/// Prefab setup:
+///   - Rigidbody: useGravity OFF, all rotation frozen
+///   - Collider (sphere or capsule)
 /// </summary>
 public class BotAgent : MonoBehaviour
 {
@@ -17,19 +21,28 @@ public class BotAgent : MonoBehaviour
     [SerializeField] private int moveMemorySize = 4;
     [SerializeField] private LayerMask environmentMask;
 
+    [Header("Anti-Camping")]
+    [SerializeField] private float emaAlpha = 0.02f;
+    [SerializeField] private float campingThreshold = 1.5f;
+
     private NeuralNetwork network;
     private BotSpawner spawner;
     private Transform player;
     private Queue<float[]> moveHistory;
     private float spawnTime;
     private bool alive;
-    private Rigidbody ball;
+    private Rigidbody rb;
 
-    // 1 (LOS) + 1 (distance) + 2 (direction) + raycasts + memory*2
-    public int InputSize => 4 + numRaycasts + moveMemorySize * 2;
-    public int OutputSize => 2;
+    // Anti-camping: EMA of position + accumulated stationary time
+    private Vector3 positionEMA;
+    private float stationaryTime;
+
+    // 1 (LOS) + 1 (distance) + 3 (direction XYZ) + raycasts + memory*3
+    public int InputSize => 5 + numRaycasts + moveMemorySize * 3;
+    public int OutputSize => 3;  // move X, Y, Z
     public float SurvivalTime { get; private set; }
     public float Fitness { get; private set; }
+    public float StationaryTime => stationaryTime;
 
     public void SetFitness(float fitness)
     {
@@ -44,17 +57,25 @@ public class BotAgent : MonoBehaviour
         this.network = network;
         this.spawner = spawner;
         this.player = player;
-        ball = GetComponent<Rigidbody>();
+        rb = GetComponent<Rigidbody>();
 
         spawnTime = Time.time;
         alive = true;
         SurvivalTime = 0f;
+        stationaryTime = 0f;
+        positionEMA = transform.position;
         ResetMoveHistory();
     }
 
     void FixedUpdate()
     {
         if (!alive || network == null) return;
+
+        // Anti-camping: update EMA and check if stationary
+        positionEMA = Vector3.Lerp(positionEMA, transform.position, emaAlpha);
+        float distFromEMA = Vector3.Distance(transform.position, positionEMA);
+        if (distFromEMA < campingThreshold)
+            stationaryTime += Time.fixedDeltaTime;
 
         float[] observations = GatherObservations();
         float[] actions = network.Forward(observations);
@@ -76,62 +97,58 @@ public class BotAgent : MonoBehaviour
 
         // 1. Line of sight (1 = player visible, 0 = blocked)
         bool hasLOS = !Physics.Linecast(
-            transform.position + Vector3.up * 0.5f,
-            player.position + Vector3.up * 0.5f,
-            environmentMask);
+            transform.position, player.position, environmentMask);
         obs[idx++] = hasLOS ? 1f : 0f;
 
         // 2. Distance to player (normalized 0-1)
         obs[idx++] = Mathf.Clamp01(toPlayer.magnitude / maxPlayerDistance);
 
-        // 3. Direction to player (horizontal)
-        Vector3 dirFlat = new Vector3(toPlayer.x, 0f, toPlayer.z).normalized;
-        obs[idx++] = dirFlat.x;
-        obs[idx++] = dirFlat.z;
+        // 3. Direction to player (full 3D)
+        Vector3 dirNorm = toPlayer.normalized;
+        obs[idx++] = dirNorm.x;
+        obs[idx++] = dirNorm.y;
+        obs[idx++] = dirNorm.z;
 
-        // 4. Environmental raycasts — evenly spaced around the bot
-        Vector3 rayOrigin = transform.position + Vector3.up * 0.5f;
+        // 4. Environmental raycasts — evenly spaced horizontally around the bot
         for (int i = 0; i < numRaycasts; i++)
         {
             float angle = i * (360f / numRaycasts);
             Vector3 dir = Quaternion.Euler(0f, angle, 0f) * Vector3.forward;
 
-            if (Physics.Raycast(rayOrigin, dir, out RaycastHit hit, raycastRange, environmentMask))
+            if (Physics.Raycast(transform.position, dir, out RaycastHit hit,
+                    raycastRange, environmentMask))
                 obs[idx++] = hit.distance / raycastRange;
             else
                 obs[idx++] = 1f; // open space
         }
 
-        // 5. Previous moves — pseudo-memory for strafing patterns
+        // 5. Previous moves — pseudo-memory for movement patterns
         foreach (float[] prev in moveHistory)
         {
             obs[idx++] = prev[0];
             obs[idx++] = prev[1];
+            obs[idx++] = prev[2];
         }
 
         return obs;
     }
 
     // ----------------------------------------------------------
-    // Movement
+    // Movement (3D — no gravity)
     // ----------------------------------------------------------
 
     private void ApplyMovement(float[] actions)
     {
-        Vector3 move = new Vector3(actions[0], 0f, actions[1]);
+        Vector3 move = new Vector3(actions[0], actions[1], actions[2]);
         if (move.sqrMagnitude > 1f)
             move.Normalize();
 
-        ball.linearVelocity = new Vector3(
-            move.x * moveSpeed,
-            ball.linearVelocity.y,  // preserve gravity
-            move.z * moveSpeed
-        );
+        rb.linearVelocity = move * moveSpeed;
     }
 
     private void RecordMove(float[] actions)
     {
-        moveHistory.Enqueue(new float[] { actions[0], actions[1] });
+        moveHistory.Enqueue(new float[] { actions[0], actions[1], actions[2] });
         if (moveHistory.Count > moveMemorySize)
             moveHistory.Dequeue();
     }
@@ -140,7 +157,7 @@ public class BotAgent : MonoBehaviour
     {
         moveHistory = new Queue<float[]>();
         for (int i = 0; i < moveMemorySize; i++)
-            moveHistory.Enqueue(new float[] { 0f, 0f });
+            moveHistory.Enqueue(new float[] { 0f, 0f, 0f });
     }
 
     // ----------------------------------------------------------
@@ -166,12 +183,10 @@ public class BotAgent : MonoBehaviour
 
     void OnDrawGizmosSelected()
     {
-        Vector3 origin = transform.position + Vector3.up * 0.5f;
-
         if (player != null)
         {
             Gizmos.color = Color.red;
-            Gizmos.DrawLine(origin, player.position);
+            Gizmos.DrawLine(transform.position, player.position);
         }
 
         for (int i = 0; i < numRaycasts; i++)
@@ -179,7 +194,14 @@ public class BotAgent : MonoBehaviour
             float angle = i * (360f / numRaycasts);
             Vector3 dir = Quaternion.Euler(0f, angle, 0f) * Vector3.forward;
             Gizmos.color = Color.yellow;
-            Gizmos.DrawRay(origin, dir * raycastRange);
+            Gizmos.DrawRay(transform.position, dir * raycastRange);
+        }
+
+        // Show EMA position and camping threshold
+        if (Application.isPlaying && alive)
+        {
+            Gizmos.color = stationaryTime > 0.5f ? Color.red : Color.green;
+            Gizmos.DrawWireSphere(positionEMA, campingThreshold);
         }
     }
 }

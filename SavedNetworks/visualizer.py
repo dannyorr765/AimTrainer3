@@ -105,11 +105,11 @@ def reconstruct_weights(data: dict) -> tuple[list[np.ndarray], list[np.ndarray]]
 # ── Drawing ──────────────────────────────────────────────────────────
 
 INPUT_LABELS = [
-    "LOS", "Dist", "Dir X", "Dir Z",
+    "LOS", "Dist", "Dir X", "Dir Y", "Dir Z",
     *[f"Ray {i}" for i in range(12)],
-    *[f"Mv{t}{'X' if ax == 0 else 'Z'}" for t in range(4) for ax in range(2)]
+    *[f"Mv{t}{'XYZ'[ax]}" for t in range(4) for ax in range(3)]
 ]
-OUTPUT_LABELS = ["Move X", "Move Z"]
+OUTPUT_LABELS = ["Move X", "Move Y", "Move Z"]
 
 
 def draw_network(ax, data: dict, weight_matrices: list[np.ndarray],

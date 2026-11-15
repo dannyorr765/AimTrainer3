@@ -26,6 +26,7 @@ public class BotSpawner : MonoBehaviour
     [SerializeField] private int eliteCount = 5;
     [SerializeField] private float mutationRate = 0.15f;
     [SerializeField] private float mutationMagnitude = 0.3f;
+    [SerializeField] private float campingPenaltyRate = 0.5f;
 
     [Header("Saving")]
     [SerializeField] private int saveTopN = 5;
@@ -127,7 +128,9 @@ public class BotSpawner : MonoBehaviour
         float timeSinceLastKill = now - lastKillTime;
         lastKillTime = now;
 
-        bot.SetFitness(timeSinceLastKill);
+        float campingPenalty = bot.StationaryTime * campingPenaltyRate;
+        float adjustedFitness = Mathf.Max(0f, timeSinceLastKill - campingPenalty);
+        bot.SetFitness(adjustedFitness);
         botsAlive--;
 
         if (botsAlive <= 0)
