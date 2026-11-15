@@ -21,6 +21,9 @@ public class BotAgent : MonoBehaviour
     [SerializeField] private int moveMemorySize = 4;
     [SerializeField] private LayerMask environmentMask;
 
+    [Header("Engagement")]
+    [SerializeField] private float engagementRange = 25f;
+
     [Header("Anti-Camping")]
     [SerializeField] private float emaAlpha = 0.02f;
     [SerializeField] private float campingThreshold = 1.5f;
@@ -37,6 +40,9 @@ public class BotAgent : MonoBehaviour
     private Vector3 positionEMA;
     private float stationaryTime;
 
+    // Engagement: time spent within engagementRange of player
+    private float timeInRange;
+
     // IO tracking: running sums + tick count for per-bot averages
     private double[] inputSums;
     private double[] outputSums;
@@ -47,7 +53,23 @@ public class BotAgent : MonoBehaviour
     public int OutputSize => 3;  // move X, Y, Z
     public float SurvivalTime { get; private set; }
     public float Fitness { get; private set; }
+    public float EngagementRatio { get; private set; }
     public float StationaryTime => stationaryTime;
+    public float TimeInRange => timeInRange;
+    public int HiddenNodeCount => network?.GetHiddenNodeCount() ?? 0;
+    public int EnabledConnectionCount => network?.GetEnabledConnectionCount() ?? 0;
+
+    public float AverageOutputMagnitude
+    {
+        get
+        {
+            if (tickCount == 0) return 0f;
+            float sum = 0f;
+            for (int i = 0; i < outputSums.Length; i++)
+                sum += Mathf.Abs((float)(outputSums[i] / tickCount));
+            return sum / outputSums.Length;
+        }
+    }
 
     public float[] GetAverageInputs()
     {
@@ -67,9 +89,10 @@ public class BotAgent : MonoBehaviour
         return avg;
     }
 
-    public void SetFitness(float fitness)
+    public void SetFitness(float fitness, float engagementRatio = 0f)
     {
         Fitness = fitness;
+        EngagementRatio = engagementRatio;
     }
 
     /// <summary>
@@ -86,6 +109,7 @@ public class BotAgent : MonoBehaviour
         alive = true;
         SurvivalTime = 0f;
         stationaryTime = 0f;
+        timeInRange = 0f;
         positionEMA = transform.position;
         ResetMoveHistory();
 
@@ -104,6 +128,11 @@ public class BotAgent : MonoBehaviour
         float distFromEMA = Vector3.Distance(transform.position, positionEMA);
         if (distFromEMA < campingThreshold)
             stationaryTime += Time.fixedDeltaTime;
+
+        // Engagement: track time spent within range of player
+        float distToPlayer = Vector3.Distance(transform.position, player.position);
+        if (distToPlayer <= engagementRange)
+            timeInRange += Time.fixedDeltaTime;
 
         float[] observations = GatherObservations();
         float[] actions = network.Forward(observations);

@@ -128,12 +128,14 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::BotAgent
   moveSpeed: 6
   numRaycasts: 12
-  raycastRange: 20
+  raycastRange: 5
   maxPlayerDistance: 50
   moveMemorySize: 4
   environmentMask:
     serializedVersion: 2
     m_Bits: 1
+  emaAlpha: 0.02
+  campingThreshold: 1.5
 --- !u!54 &6335477847277382040
 Rigidbody:
   m_ObjectHideFlags: 0
