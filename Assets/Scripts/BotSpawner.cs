@@ -41,6 +41,8 @@ public class BotSpawner : MonoBehaviour
     private NeuralNetwork bestNetwork;
     private float lastKillTime;
     private string savePath;
+    private int[] topology;
+    private bool shuttingDown = false;
 
     void Start()
     {
@@ -52,18 +54,40 @@ public class BotSpawner : MonoBehaviour
         var template = botPrefab.GetComponent<BotAgent>();
 
         // Build network topology: input → hidden → output
-        int[] topology = new int[hiddenLayers.Length + 2];
+        topology = new int[hiddenLayers.Length + 2];
         topology[0] = template.InputSize;
         for (int i = 0; i < hiddenLayers.Length; i++)
             topology[i + 1] = hiddenLayers[i];
         topology[topology.Length - 1] = template.OutputSize;
 
-        population = new List<NeuralNetwork>();
-        for (int i = 0; i < botsPerGeneration; i++)
-            population.Add(new NeuralNetwork(topology));
-
         Debug.Log($"[Evolution] Topology: [{string.Join(", ", topology)}], Pop: {botsPerGeneration}");
+
+        // Try to resume from saved networks
+        if (TryLoadLatestGeneration())
+        {
+            Debug.Log($"[Evolution] Resumed from generation {generation - 1}, starting gen {generation}");
+        }
+        else
+        {
+            population = new List<NeuralNetwork>();
+            for (int i = 0; i < botsPerGeneration; i++)
+                population.Add(new NeuralNetwork(topology));
+            Debug.Log("[Evolution] No saved networks found, starting fresh");
+        }
+
         SpawnGeneration();
+    }
+
+    void OnApplicationQuit()
+    {
+        shuttingDown = true;
+        CancelInvoke();
+    }
+
+    void OnDestroy()
+    {
+        shuttingDown = true;
+        CancelInvoke();
     }
 
     private void SpawnGeneration()
@@ -97,6 +121,8 @@ public class BotSpawner : MonoBehaviour
     /// </summary>
     public void OnBotKilled(BotAgent bot, float survivalTime)
     {
+        if (shuttingDown) return;
+
         float now = Time.time;
         float timeSinceLastKill = now - lastKillTime;
         lastKillTime = now;
@@ -219,6 +245,90 @@ public class BotSpawner : MonoBehaviour
         {
             Debug.LogWarning("[Evolution] Population not initialized yet. Load after Start().");
         }
+    }
+
+    // --- Resume ---
+
+    /// <summary>
+    /// Scans the save folder for the highest generation, loads its networks,
+    /// and breeds a full population from them. Returns false if nothing to load.
+    /// </summary>
+    private bool TryLoadLatestGeneration()
+    {
+        if (!Directory.Exists(savePath)) return false;
+
+        // Find all Gen_XXXX folders and pick the highest number
+        int latestGen = -1;
+        string latestDir = null;
+
+        foreach (string dir in Directory.GetDirectories(savePath, "Gen_*"))
+        {
+            string folderName = Path.GetFileName(dir);
+            if (folderName.Length > 4 && int.TryParse(folderName.Substring(4), out int num))
+            {
+                if (num > latestGen)
+                {
+                    latestGen = num;
+                    latestDir = dir;
+                }
+            }
+        }
+
+        if (latestDir == null) return false;
+
+        // Load all network files from that generation
+        var loaded = new List<NeuralNetwork>();
+        float loadedBestFitness = 0f;
+
+        string[] files = Directory.GetFiles(latestDir, "network_*.json");
+        System.Array.Sort(files);  // network_0, network_1, ...
+
+        foreach (string file in files)
+        {
+            try
+            {
+                string json = File.ReadAllText(file);
+                var data = JsonUtility.FromJson<SaveData>(json);
+                var net = new NeuralNetwork(data.topology);
+                net.Unflatten(data.weights);
+                loaded.Add(net);
+
+                if (data.fitness > loadedBestFitness)
+                {
+                    loadedBestFitness = data.fitness;
+                    bestNetwork = net.Clone();
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"[Evolution] Failed to load {file}: {e.Message}");
+            }
+        }
+
+        if (loaded.Count == 0) return false;
+
+        // Set generation to one past the loaded one
+        generation = latestGen + 1;
+        bestFitnessEver = loadedBestFitness;
+
+        // Build population: loaded elites first, then breed from them
+        population = new List<NeuralNetwork>();
+
+        foreach (var net in loaded)
+            population.Add(net.Clone());
+
+        // Fill remaining slots by crossover + mutation of loaded networks
+        while (population.Count < botsPerGeneration)
+        {
+            var parentA = loaded[Random.Range(0, loaded.Count)];
+            var parentB = loaded[Random.Range(0, loaded.Count)];
+            var child = NeuralNetwork.Crossover(parentA, parentB);
+            child.Mutate(mutationRate, mutationMagnitude);
+            population.Add(child);
+        }
+
+        Debug.Log($"[Evolution] Loaded {loaded.Count} networks from Gen {latestGen} (best fitness: {loadedBestFitness:F2}s)");
+        return true;
     }
 
     [System.Serializable]
